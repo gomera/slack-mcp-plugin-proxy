@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Turn off the Mac's web proxy and stop the Slack-OAuth rewrite proxy.
+# Safe to run anytime (e.g. after signing in, or if things seem stuck).
+#
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICE="${SLACK_PROXY_SERVICE:-Wi-Fi}"
+LOGDIR="$DIR/logs"
+PIDFILE="$DIR/.mitmdump.pid"
+ACTIONLOG="$LOGDIR/proxy.log"
+mkdir -p "$LOGDIR"
+
+# Echo to the terminal AND append a timestamped copy to the action log.
+log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$ACTIONLOG"; }
+
+# Disable the proxy first so the network keeps working even if the next step fails.
+sudo networksetup -setsecurewebproxystate "$SERVICE" off
+sudo networksetup -setwebproxystate       "$SERVICE" off
+
+# Confirm the OS actually recorded the proxy as disabled.
+if networksetup -getsecurewebproxy "$SERVICE" | grep -q "Enabled: No"; then
+  log "proxy OFF for '$SERVICE' (verified disabled)"
+else
+  log "WARNING: HTTPS proxy still reports enabled for '$SERVICE'"
+fi
+
+# Stop mitmdump.
+if [[ -f "$PIDFILE" ]]; then
+  PID="$(cat "$PIDFILE")"
+  if kill -0 "$PID" 2>/dev/null; then
+    kill "$PID" && log "stopped mitmdump (pid $PID)"
+  else
+    log "mitmdump (pid $PID) was not running; clearing stale pidfile"
+  fi
+  rm -f "$PIDFILE"
+elif pkill -f "mitmdump -s $DIR/rewrite.py" 2>/dev/null; then
+  log "stopped mitmdump (matched by command line)"
+else
+  log "no mitmdump process to stop"
+fi

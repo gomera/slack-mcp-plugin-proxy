@@ -1,0 +1,10 @@
+# Runtime artifacts written by slack-proxy-on/off
+logs/*
+!logs/.gitkeep
+
+# mitmproxy intercepts can include captured request/response data — never commit
+*.log
+*.pid
+
+# macOS
+.DS_Store

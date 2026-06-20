@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#
+# Start the Slack-OAuth rewrite proxy and point this Mac's web proxy at it.
+# Only slack.com is intercepted (--allow-hosts); all other traffic passes
+# through untouched and undecrypted. Run before signing into the Slack MCP
+# plugin from Xcode; run ./slack-proxy-off when done.
+#
+# Override the network service or port if needed:
+#   SLACK_PROXY_SERVICE="Wi-Fi" SLACK_PROXY_PORT=8080 ./slack-proxy-on
+#
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICE="${SLACK_PROXY_SERVICE:-Wi-Fi}"
+PORT="${SLACK_PROXY_PORT:-8080}"
+LOGDIR="$DIR/logs"
+PIDFILE="$DIR/.mitmdump.pid"          # runtime state -> repo root (git-ignored via *.pid)
+TRAFFICLOG="$LOGDIR/mitmdump.log"     # mitmproxy's own capture
+ACTIONLOG="$LOGDIR/proxy.log"         # on/off actions from these scripts
+mkdir -p "$LOGDIR"
+
+# Echo to the terminal AND append a timestamped copy to the action log.
+log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$ACTIONLOG"; }
+
+if ! command -v mitmdump >/dev/null 2>&1; then
+  log "ERROR: mitmdump not found. Install it with: brew install mitmproxy"
+  exit 1
+fi
+
+# Start mitmdump if it isn't already running.
+if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+  log "mitmdump already running (pid $(cat "$PIDFILE"))"
+else
+  mitmdump -s "$DIR/rewrite.py" -p "$PORT" --allow-hosts 'slack\.com' >"$TRAFFICLOG" 2>&1 &
+  echo $! >"$PIDFILE"
+  sleep 1
+  if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    log "ERROR: mitmdump failed to start; see $TRAFFICLOG"
+    rm -f "$PIDFILE"
+    exit 1
+  fi
+  log "started mitmdump (pid $(cat "$PIDFILE")), traffic -> $TRAFFICLOG"
+fi
+
+# Route the chosen interface's web traffic through the proxy (needs sudo).
+sudo networksetup -setsecurewebproxy "$SERVICE" 127.0.0.1 "$PORT"
+sudo networksetup -setwebproxy       "$SERVICE" 127.0.0.1 "$PORT"
+log "proxy ON for '$SERVICE' -> 127.0.0.1:$PORT (only slack.com is intercepted)"
+
+# Confirm the OS actually recorded the proxy as enabled.
+if networksetup -getsecurewebproxy "$SERVICE" | grep -q "Enabled: Yes"; then
+  log "verified: HTTPS proxy enabled for '$SERVICE'"
+else
+  log "WARNING: HTTPS proxy does not report enabled for '$SERVICE' — check the service name"
+fi
+log "now trigger Slack sign-in in Xcode; run ./slack-proxy-off when finished."
